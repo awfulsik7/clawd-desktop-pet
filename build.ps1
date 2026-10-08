@@ -9,6 +9,6 @@ $out = Join-Path $PSScriptRoot 'Clawd.exe'
 # UIAutomation finds interface components in other apps.
 & $csc /nologo /target:winexe /optimize+ /codepage:65001 "/out:$out" "/lib:$fw\WPF" `
     /r:PresentationFramework.dll /r:PresentationCore.dll /r:WindowsBase.dll /r:System.Xaml.dll `
-    /r:UIAutomationClient.dll /r:UIAutomationTypes.dll /r:System.Runtime.dll `
+    /r:Accessibility.dll /r:UIAutomationClient.dll /r:UIAutomationTypes.dll /r:System.Runtime.dll `
     "/r:$meta\Windows.Media.winmd" "/r:$meta\Windows.Foundation.winmd" $src
 exit $LASTEXITCODE

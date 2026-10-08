@@ -45,6 +45,15 @@ static class Native
     [StructLayout(LayoutKind.Sequential)]
     public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GUITHREADINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+        public RECT rcCaret;
+    }
+
     public delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
 
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
@@ -68,6 +77,9 @@ static class Native
     [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int max);
     [DllImport("kernel32.dll")] public static extern uint GetTickCount();
+    [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    [DllImport("oleacc.dll")] public static extern int AccessibleObjectFromWindow(IntPtr hwnd, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object acc);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int size);
 
@@ -79,14 +91,23 @@ static class Native
     public const int DWMWA_CLOAKED = 14;
     public const int VK_LBUTTON = 1;
     public const uint GA_ROOT = 2;
+    public const uint OBJID_CARET = 0xFFFFFFF8;
 }
 
 enum St
 {
     Fall, Idle, Walk, Sit, Sleep, Wave, Drag, Hang, Cling, Code, Think, Dance,
     Coffee, Read, Stretch, Celebrate, Music, Search, Dizzy, Love,
-    Watch, Game, Phone, Exercise, Eat
+    Watch, Game, Phone, Exercise, Eat,
+    // Being stroked, knocked off its feet, running after the ball, bringing
+    // it back, and hiding in a game of hide-and-seek.
+    Pet, Trip, Chase, Fetch, Hide,
+    // Running from the mouse in a game of tag, and waiting for the signal in
+    // the reaction game.
+    Flee, Ready
 }
+
+enum BallSt { None, Held, Free, Rest, Carried }
 
 // A diary of drops, for working out why the pet did not end up where it was
 // put. Off unless the CLAWD_LOG environment variable names a file.
@@ -144,13 +165,98 @@ class Activity
     // The small hours, when the pet nags about bedtime.
     public volatile bool Late;
 
+    // True while keys are being pressed: several inputs in a row with the
+    // mouse standing still. Which keys is never looked at.
+    public volatile bool Typing;
+
     GlobalSystemMediaTransportControlsSessionManager media;
+    readonly int myPid = Process.GetCurrentProcess().Id;
+    readonly object caretGate = new object();
+    Rect caret = Rect.Empty;
 
     public Activity()
     {
         Thread thread = new Thread(Loop);
         thread.IsBackground = true;
         thread.Start();
+        Thread typing = new Thread(CaretLoop);
+        typing.IsBackground = true;
+        typing.Start();
+    }
+
+    // Where the text cursor is while the person types, in screen pixels;
+    // false when the app in front does not say.
+    public bool TryCaret(out Rect rect)
+    {
+        lock (caretGate)
+        {
+            rect = caret;
+            return !rect.IsEmpty;
+        }
+    }
+
+    void CaretLoop()
+    {
+        uint lastInput = 0;
+        Native.POINT lastCursor = new Native.POINT();
+        int streak = 0;
+        while (true)
+        {
+            Native.LASTINPUTINFO input = new Native.LASTINPUTINFO();
+            input.cbSize = 8;
+            Native.GetLastInputInfo(ref input);
+            Native.POINT cursor;
+            Native.GetCursorPos(out cursor);
+            bool keys = input.dwTime != lastInput && cursor.X == lastCursor.X && cursor.Y == lastCursor.Y;
+            streak = keys ? Math.Min(8, streak + 2) : Math.Max(0, streak - 1);
+            lastInput = input.dwTime;
+            lastCursor = cursor;
+            Typing = streak >= 5;
+
+            Rect found = Rect.Empty;
+            if (Typing)
+            {
+                // The app in front may be busy or closing; then there is simply no caret to dodge.
+                try { found = ReadCaret(); }
+                catch (Exception) { }
+            }
+            lock (caretGate) caret = found;
+            Thread.Sleep(200);
+        }
+    }
+
+    // Classic apps report the caret through the window system; browsers and
+    // apps built on them only through the accessibility interface.
+    Rect ReadCaret()
+    {
+        IntPtr front = Native.GetForegroundWindow();
+        uint pid;
+        uint thread = Native.GetWindowThreadProcessId(front, out pid);
+        if (front == IntPtr.Zero || pid == myPid) return Rect.Empty;
+
+        Native.GUITHREADINFO info = new Native.GUITHREADINFO();
+        info.cbSize = Marshal.SizeOf(typeof(Native.GUITHREADINFO));
+        if (!Native.GetGUIThreadInfo(thread, ref info)) return Rect.Empty;
+        Native.RECT rc = info.rcCaret;
+        if (info.hwndCaret != IntPtr.Zero && (rc.Right > rc.Left || rc.Bottom > rc.Top))
+        {
+            Native.POINT corner;
+            corner.X = rc.Left;
+            corner.Y = rc.Top;
+            Native.ClientToScreen(info.hwndCaret, ref corner);
+            return new Rect(corner.X, corner.Y, Math.Max(1, rc.Right - rc.Left), Math.Max(1, rc.Bottom - rc.Top));
+        }
+
+        object found;
+        Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+        IntPtr focus = info.hwndFocus != IntPtr.Zero ? info.hwndFocus : front;
+        if (Native.AccessibleObjectFromWindow(focus, Native.OBJID_CARET, ref iid, out found) != 0) return Rect.Empty;
+        Accessibility.IAccessible acc = found as Accessibility.IAccessible;
+        if (acc == null) return Rect.Empty;
+        int left, top, width, height;
+        acc.accLocation(out left, out top, out width, out height, 0);
+        if ((left == 0 && top == 0) || (width <= 0 && height <= 0)) return Rect.Empty;
+        return new Rect(left, top, Math.Max(1, width), Math.Max(1, height));
     }
 
     void Loop()
@@ -476,6 +582,58 @@ class ElementTracker
     }
 }
 
+// The ball of the fetch game: a tiny window of its own, since it flies far
+// from the pet. Grabbing it with the mouse is reported to the pet, which
+// runs the physics.
+class BallWindow : Window
+{
+    public const double Radius = 15;
+
+    class Face : FrameworkElement
+    {
+        static readonly string[] Shape = { ".###.", "#####", "#####", "#####", ".###." };
+
+        public Face()
+        {
+            RenderOptions.SetEdgeMode(this, EdgeMode.Aliased);
+        }
+
+        protected override void OnRender(DrawingContext dc)
+        {
+            Brush fill = new SolidColorBrush(Color.FromRgb(245, 200, 80));
+            Brush dark = new SolidColorBrush(Color.FromRgb(196, 150, 50));
+            for (int r = 0; r < 5; r++)
+                for (int c = 0; c < 5; c++)
+                    if (Shape[r][c] == '#') dc.DrawRectangle(r == 4 || c == 4 ? dark : fill, null, new Rect(c * 6, r * 6, 6, 6));
+            dc.DrawRectangle(Brushes.White, null, new Rect(6, 6, 6, 6));
+        }
+    }
+
+    public BallWindow(Action grabbed, Action dismissed)
+    {
+        Title = "Claw'd ball";
+        WindowStyle = WindowStyle.None;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        Topmost = true;
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        ResizeMode = ResizeMode.NoResize;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Width = Radius * 2;
+        Height = Radius * 2;
+        Cursor = Cursors.Hand;
+        Content = new Face();
+        SourceInitialized += delegate
+        {
+            IntPtr h = new WindowInteropHelper(this).Handle;
+            Native.SetWindowLong(h, Native.GWL_EXSTYLE, Native.GetWindowLong(h, Native.GWL_EXSTYLE) | Native.WS_EX_TOOLWINDOW);
+        };
+        MouseLeftButtonDown += delegate { grabbed(); };
+        MouseRightButtonUp += delegate { dismissed(); };
+    }
+}
+
 // Draws the sprite on a grid of Cols x Rows units with the feet on the bottom
 // edge, centred under a strip that holds the speech bubble. Details (shading,
 // eyes, props, particles) sit on a grid of half units.
@@ -500,6 +658,15 @@ class PetView : FrameworkElement
     public bool Climbing;
     // 1 right after landing, easing to 0.
     public double Squash;
+    // Which way the pet was knocked over: +1 right, -1 left.
+    public int TripDir = 1;
+    // Hiding: only what sticks out above the edge it hides behind is drawn.
+    public bool Peek;
+    // A card held up over the head: 0 rock, 1 scissors, 2 paper, 3 the
+    // "now!" of the reaction game; -1 for none.
+    public int Sign = -1;
+    public const double PeekRows = 8;
+    public const double TripSeconds = 2.2;
     public string Text;
     // Draws the bubble under the feet, for when the strip above is off screen.
     public bool Below;
@@ -540,6 +707,12 @@ class PetView : FrameworkElement
     static readonly string[] Ring = { ".###.", "#...#", "#...#", "#...#", ".###." };
     static readonly string[] Cross = { "#.#", ".#.", "#.#" };
     static readonly string[] Message = { "####", "####", ".#.." };
+    static readonly string[] Ball = { ".##.", "####", "####", ".##." };
+    static readonly string[][] Signs = {
+        new string[] { ".#####.", "#######", "#######", "#######", "#######", ".#####." },
+        new string[] { "#.....#", ".#...#.", "..#.#..", "...#...", "##.#.##", "##...##" },
+        new string[] { "#######", "#.....#", "#.###.#", "#.....#", "#.###.#", "#######" },
+        new string[] { "..###..", "..###..", "..###..", "..###..", ".......", "..###.." } };
 
     static Brush Frozen(byte r, byte g, byte b)
     {
@@ -575,13 +748,32 @@ class PetView : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         DrawBubble(dc);
+        if (Peek) dc.PushClip(new RectangleGeometry(new Rect(0, 0, WindowWidth, BubbleStrip + PeekRows * U)));
         dc.PushTransform(new TranslateTransform((WindowWidth - Cols * U) / 2, BubbleStrip));
-        // The magnifying glass leads the way, so searching leftwards mirrors the sprite.
-        bool mirror = State == St.Search && Dir < 0;
+        // The magnifying glass leads the way, so searching leftwards mirrors
+        // the sprite; so does carrying the ball back.
+        bool mirror = (State == St.Search || State == St.Fetch) && Dir < 0;
         if (mirror) dc.PushTransform(new ScaleTransform(-1, 1, Cols * U / 2, 0));
+
+        // Knocked over, it tips onto its side in three steps, lies there and
+        // tips back up the same way.
+        bool tipped = State == St.Trip;
+        if (tipped)
+        {
+            double k = Math.Min(1, Math.Min(ST / 0.15, (TripSeconds - ST) / 0.3));
+            k = Math.Round(Math.Max(0, k) * 3) / 3;
+            dc.PushTransform(new TranslateTransform(-TripDir * 4 * U * k, -7 * U * k));
+            dc.PushTransform(new RotateTransform(TripDir * 90 * k, Cols * U / 2, Rows * U));
+        }
         DrawSprite(dc);
+        if (tipped)
+        {
+            dc.Pop();
+            dc.Pop();
+        }
         if (mirror) dc.Pop();
         dc.Pop();
+        if (Peek) dc.Pop();
     }
 
     // A pixel-art bubble: stepped corners, a border one block thick and a
@@ -591,7 +783,7 @@ class PetView : FrameworkElement
         if (string.IsNullOrEmpty(Text)) return;
         const double P = 3;
         FormattedText ft = new FormattedText(Text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Font, 13.5, Eye);
-        ft.MaxTextWidth = 160;
+        ft.MaxTextWidth = 210;
         ft.MaxLineCount = 1;
         ft.Trimming = TextTrimming.CharacterEllipsis;
 
@@ -675,6 +867,8 @@ class PetView : FrameworkElement
         int beat = (int)(T * 4) % 2;
         int slow = (int)(T * 2.5) % 2;
         if (State == St.Search) phase = beat;
+        if (State == St.Chase || State == St.Flee) phase = (int)(T * 14) % 2;
+        bool walking = State == St.Walk || State == St.Search || State == St.Chase || State == St.Fetch || State == St.Flee;
 
         // Breathing lifts the top of the body by one pixel.
         double breath = 0;
@@ -683,7 +877,7 @@ class PetView : FrameworkElement
             double speed = State == St.Sleep ? 1.2 : 2.4;
             if (Math.Sin(T * speed) > 0.4) breath = 1.0 / U;
         }
-        if ((State == St.Walk || State == St.Search) && phase == 1) breath = 1.0 / U;
+        if (walking && phase == 1) breath = 1.0 / U;
         if (State == St.Dance && beat == 1) breath = 1;
         if (State == St.Music && slow == 1) breath = 0.5;
 
@@ -704,6 +898,12 @@ class PetView : FrameworkElement
         int sitStep = State == St.Sit && ST < 0.3 ? (int)(ST / 0.1) : 2;
         double bodyTop = (sitting ? 4 + sitStep : 4) - breath - stretch + squash;
         double bodyH = 8 + breath + stretch - squash;
+        // A stroking hand presses the head down a little on every pass.
+        if (State == St.Pet && beat == 0)
+        {
+            bodyTop += 0.5;
+            bodyH -= 0.5;
+        }
         double lean = 0;
         if (State == St.Dance) lean = beat == 0 ? -1 : 1;
         if (State == St.Music) lean = slow == 0 ? -0.5 : 0.5;
@@ -738,8 +938,8 @@ class PetView : FrameworkElement
                     continue;
                 }
                 double len = 2;
-                if ((State == St.Walk || State == St.Search) && i % 2 == phase) len = 1;
-                if (State == St.Drag && i % 2 == (int)(T * 10) % 2) len = 1;
+                if (walking && i % 2 == phase) len = 1;
+                if ((State == St.Drag || State == St.Trip) && i % 2 == (int)(T * 10) % 2) len = 1;
                 if (State == St.Dance && i % 2 == beat) len = 1;
                 if (State == St.Music && i == 3 && slow == 1) len = 1.5;
                 if (State == St.Celebrate && jump < -1) len = 1.5;
@@ -749,7 +949,7 @@ class PetView : FrameworkElement
 
         Torso(dc, bodyX, bodyTop, bodyW, bodyH);
 
-        if (armsUp || jack || (State == St.Stretch && stretch >= 1))
+        if (armsUp || jack || (State == St.Stretch && stretch >= 1) || (State == St.Ready && Sign == 3))
         {
             Limb(dc, 1, bodyTop - 2, 2, 4);
             Limb(dc, 15, bodyTop - 2, 2, 4);
@@ -779,7 +979,12 @@ class PetView : FrameworkElement
             Limb(dc, 1 + lean, bodyTop + (beat == 0 ? -1 : 4), 2, beat == 0 ? 3 : 2);
             Limb(dc, 15 + lean, bodyTop + (beat == 1 ? -1 : 4), 2, beat == 1 ? 3 : 2);
         }
-        else if (State == St.Code || State == St.Walk)
+        else if (State == St.Fetch)
+        {
+            Limb(dc, 1, bodyTop + 4 - (phase == 0 ? 0.5 : 0), 2, 2);
+            Limb(dc, 15, bodyTop + 3, 2, 2);
+        }
+        else if (State == St.Code || State == St.Walk || State == St.Chase || State == St.Flee)
         {
             // Typing, or swinging while walking: the arms move in turn.
             Limb(dc, 1, bodyTop + 4 - (phase == 0 ? 0.5 : 0), 2, 2);
@@ -831,6 +1036,10 @@ class PetView : FrameworkElement
         if (State == St.Watch) eyes = ST % 8 > 6.5 ? EyeKind.Happy : EyeKind.Wide;
         if (State == St.Game) eyes = EyeKind.Squint;
         if (State == St.Eat && munching) eyes = EyeKind.Happy;
+        if (State == St.Pet || State == St.Chase || State == St.Fetch) eyes = EyeKind.Happy;
+        if (State == St.Trip) eyes = EyeKind.Dizzy;
+        if (State == St.Flee) eyes = EyeKind.Wide;
+        if (State == St.Ready) eyes = Sign == 3 ? EyeKind.Wide : EyeKind.Squint;
         if (State == St.Sleep || sipping || stretch > 0 || (Blink && eyes == EyeKind.Open)) eyes = EyeKind.Closed;
 
         double eyeDy = State == St.Code || State == St.Read ? 0.3 : State == St.Phone ? 0.5 : State == St.Think ? -0.8 : 0;
@@ -840,13 +1049,13 @@ class PetView : FrameworkElement
         DrawEye(dc, eyes, 5 + eyeDx + lean, bodyTop + 2 + eyeDy);
         DrawEye(dc, eyes, 12 + eyeDx + lean, bodyTop + 2 + eyeDy);
 
-        if (State == St.Love || State == St.Wave || State == St.Celebrate)
+        if (State == St.Love || State == St.Wave || State == St.Celebrate || State == St.Pet)
         {
             R(dc, Blush, 3.5 + lean, bodyTop + 4.5, 1.5, 0.5);
             R(dc, Blush, 13 + lean, bodyTop + 4.5, 1.5, 0.5);
         }
         // A round mouth for a yawn or a fright.
-        if (stretch >= 1 || State == St.Drag || State == St.Fall) R(dc, Eye, 8.5, bodyTop + 4.5, 1, 1);
+        if (stretch >= 1 || State == St.Drag || State == St.Fall || State == St.Trip) R(dc, Eye, 8.5, bodyTop + 4.5, 1, 1);
 
         // The tongue sticks out when the game gets serious.
         if (State == St.Game) R(dc, Pink, 8.5, bodyTop + 4.5, 1, 0.5);
@@ -905,6 +1114,11 @@ class PetView : FrameworkElement
             G(dc, Eye, 15.5, bodyTop, Ring);
             R(dc, Eye, 16.5, bodyTop + 2.5, 0.5, 1);
         }
+        else if (State == St.Fetch)
+        {
+            G(dc, Yellow, 16, bodyTop + 1.5, Ball);
+            R(dc, White, 16.5, bodyTop + 2, 0.5, 0.5);
+        }
         else if (State == St.Watch)
         {
             // A striped bucket of popcorn, and a piece on its way up.
@@ -952,6 +1166,12 @@ class PetView : FrameworkElement
 
     void DrawParticles(DrawingContext dc, double bodyTop)
     {
+        if (Sign >= 0)
+        {
+            R(dc, Eye, 6.25, bodyTop - 5.75, 5.5, 5);
+            R(dc, Paper, 6.75, bodyTop - 5.25, 4.5, 4);
+            G(dc, Sign == 3 ? Red : Eye, 7.25, bodyTop - 4.75, Signs[Sign]);
+        }
         if (State == St.Sleep)
         {
             int shown = (int)(T * 1.2) % 4;
@@ -977,7 +1197,7 @@ class PetView : FrameworkElement
             Rising(dc, Paper, Note, 15.5, bodyTop - 2, T * 0.45 % 1, 4);
             Rising(dc, Paper, Note, 0.5, bodyTop - 2, (T * 0.45 + 0.5) % 1, 4);
         }
-        else if (State == St.Love)
+        else if (State == St.Love || State == St.Pet)
         {
             for (int k = 0; k < 3; k++)
                 Rising(dc, Pink, Heart, 3.5 + k * 4.5, bodyTop - 2.5, (ST * 0.7 + k / 3.0) % 1, 4);
@@ -1058,6 +1278,26 @@ class Pet : Window
     static readonly string[][] ChatLines = {
         new string[] { "кому пишешь?", "передавай привет", "я тоже в чате", "печатает..." },
         new string[] { "who are you texting?", "say hi from me", "I'm chatting too", "typing..." } };
+    static readonly string[][] PetLines = {
+        new string[] { "мрр", "ещё!", "приятно...", "не останавливайся", "хороший человек" },
+        new string[] { "purr", "more!", "that's nice...", "don't stop", "good human" } };
+    static readonly string[][] TripLines = {
+        new string[] { "ой!", "эй, ноги!", "за что?!", "подножка!" },
+        new string[] { "ouch!", "hey, my legs!", "what for?!", "tripped!" } };
+    static readonly string[][] SorryLines = {
+        new string[] { "ой, извини", "мешаю? отхожу", "прости, пиши-пиши", "уже ушёл" },
+        new string[] { "oops, sorry", "in the way? moving", "sorry, keep typing", "I'm gone" } };
+    // Lines of the two games; {0} is a number.
+    static readonly string[][] PlayLines = {
+        new string[] { "кидай!", "поймал!", "ещё!", "наигрался", "прячусь! не смотри", "пссс", "я был тут!", "нашёл! за {0} сек", "уже {0}!",
+            "не догонишь!", "поймал! за {0} сек", "не поймал!", "{0} раз!", "жди...", "ЖМИ!", "{0} мс!", "рано!", "заснул?",
+            "ничья", "я выиграл!", "ты выиграл", "набивай! кликай по мячу", "рекорд!" },
+        new string[] { "throw it!", "got it!", "again!", "that's enough", "hiding! don't look", "psst", "I was here!", "found me! {0} sec", "that's {0}!",
+            "can't catch me!", "caught! {0} sec", "too slow!", "{0} hits!", "wait...", "NOW!", "{0} ms!", "too early!", "asleep?",
+            "a draw", "I win!", "you win", "keep it up! click the ball", "a record!" } };
+    static readonly string[][] SignNames = {
+        new string[] { "камень", "ножницы", "бумага" },
+        new string[] { "rock", "scissors", "paper" } };
     static readonly string[][] SeatLines = {
         new string[] { "присел", "удобно тут", "хорошее место", "посижу тут", "моё место" },
         new string[] { "sat down", "comfy here", "nice spot", "I'll sit here", "my spot" } };
@@ -1119,6 +1359,38 @@ class Pet : Window
     Ctx ctx = Ctx.None;
     string ctxTitle = "";
     double nextExercise = 2700;
+
+    // Stroking and tripping: where the mouse was a frame ago, and how many
+    // times it has changed direction over the head.
+    double lastCx, lastCy, sweepX, sweepY, lastStroke, nextDodge;
+    int strokes, strokeSign;
+
+    // The fetch game. The ball's position is its centre, in DIPs.
+    BallWindow ball;
+    BallSt ballSt = BallSt.None;
+    double bx, by, bvx, bvy, ballPrevX, ballPrevY, ballSince;
+    bool wantBall;
+    int fetched;
+
+    // Keeping the ball in the air: every click near it knocks it back up.
+    bool juggling, wasDown;
+    int juggleCount, juggleBest;
+
+    // Tag: the pet runs from the mouse until it is clicked.
+    bool tagPending;
+    double tagStart, dashUntil;
+
+    // The reaction game: 0 while waiting for the signal, 1 once it is up.
+    int readyPhase;
+    double goAt, bestReaction;
+
+    // Rock, paper, scissors: the card it holds up, and the score.
+    int cardSign = -1, myWins, itsWins;
+    double cardUntil;
+
+    // Hide-and-seek: 0 while it vanishes, 1 once it peeks from its spot.
+    int hidePhase;
+    double hideStart, nextHint;
 
     // A component of some app's interface the pet is holding on to.
     ElementTracker tracker;
@@ -1211,6 +1483,23 @@ class Pet : Window
             anims.Items.Add(Item(StateNames[i, 1], delegate { Command("--state", name); }));
         }
         menu.Items.Add(anims);
+
+        MenuItem games = new MenuItem();
+        games.Header = "Игры";
+        games.Items.Add(Item("Мячик", delegate { StartBall(); }));
+        games.Items.Add(Item("Набивание мяча", delegate { StartJuggle(); }));
+        games.Items.Add(Item("Прятки", delegate { StartHide(); }));
+        games.Items.Add(Item("Догонялки", delegate { StartTag(); }));
+        games.Items.Add(Item("Реакция", delegate { StartReaction(); }));
+        MenuItem cards = new MenuItem();
+        cards.Header = "Камень, ножницы, бумага";
+        cards.Items.Add(Item("Камень", delegate { PlayCards(0); }));
+        cards.Items.Add(Item("Ножницы", delegate { PlayCards(1); }));
+        cards.Items.Add(Item("Бумага", delegate { PlayCards(2); }));
+        games.Items.Add(cards);
+        games.Items.Add(new Separator());
+        games.Items.Add(Item("Убрать мячик", delegate { EndBall(); }));
+        menu.Items.Add(games);
 
         MenuItem talk = new MenuItem();
         talk.Header = "Болтать";
@@ -1320,6 +1609,26 @@ class Pet : Window
             return;
         }
         if (verb != "--state" || state == St.Drag) return;
+        if (arg == "ball") StartBall();
+        else if (arg == "throw")
+        {
+            // A throw from where the ball lies, as if flung with the mouse.
+            StartBall();
+            bvx = 700;
+            bvy = -800;
+            ThrowBall();
+        }
+        else if (arg == "hide") StartHide();
+        else if (arg == "pet" && Grounded) Set(St.Pet, 2.5);
+        else if (arg == "trip" && Grounded) Set(St.Trip, PetView.TripSeconds);
+        else if (arg == "juggle") StartJuggle();
+        else if (arg == "tag") StartTag();
+        else if (arg == "react") StartReaction();
+        else if (arg == "rock") PlayCards(0);
+        else if (arg == "scissors") PlayCards(1);
+        else if (arg == "paper") PlayCards(2);
+        if (arg == "ball" || arg == "throw" || arg == "hide" || arg == "pet" || arg == "trip" || arg == "juggle" || arg == "tag"
+            || arg == "react" || arg == "rock" || arg == "scissors" || arg == "paper") return;
         if (arg == "hang") AttachToForeground(true);
         else if (arg == "cling") ClingToScreen();
 
@@ -1590,6 +1899,8 @@ class Pet : Window
         else Set(St.Idle, 0.8 + rng.NextDouble());
         sitOnLand = false;
         thrown = false;
+        if (wantBall && ballSt != BallSt.None) Set(St.Chase, 30);
+        if (tagPending) BeginTag();
     }
 
     void StartCling(IntPtr window, Rect r, int side)
@@ -1763,9 +2074,445 @@ class Pet : Window
         StartCling(IntPtr.Zero, new Rect(), side);
     }
 
+    static bool IsSitting(St s)
+    {
+        return s == St.Sit || s == St.Sleep || s == St.Code || s == St.Read || s == St.Coffee || s == St.Watch || s == St.Game || s == St.Eat;
+    }
+
+    // ---- The mouse over the pet: stroking the head, sweeping the legs.
+
+    void TickTouch(double dt, double cx, double cy, bool down)
+    {
+        double dx = cx - lastCx, dy = cy - lastCy;
+        lastCx = cx;
+        lastCy = cy;
+        // The sweep speed is averaged over a few frames: one frame alone is
+        // too jumpy to tell a flick from an ordinary move.
+        if (dt > 0)
+        {
+            sweepX = 0.6 * sweepX + 0.4 * dx / dt;
+            sweepY = 0.6 * sweepY + 0.4 * dy / dt;
+        }
+        if (down || !Grounded || state == St.Trip || state == St.Hide || state == St.Chase || state == St.Fetch || state == St.Flee || state == St.Ready)
+        {
+            strokes = 0;
+            return;
+        }
+
+        double head = y - H + (IsSitting(state) ? 6 : 4) * u;
+        bool overHead = Math.Abs(cx - x) < 8 * u && cy > head - 5 * u && cy < head + 3 * u;
+        if (overHead)
+        {
+            // A stroke is a change of direction; three of them in a row is petting.
+            int sign = dx > 0.5 ? 1 : dx < -0.5 ? -1 : 0;
+            if (sign != 0 && sign != strokeSign)
+            {
+                strokeSign = sign;
+                strokes = t - lastStroke > 0.9 ? 1 : strokes + 1;
+                lastStroke = t;
+            }
+            if (strokes >= 3)
+            {
+                strokes = 2;
+                if (state == St.Pet) stateDur = stateT + 1.2;
+                else
+                {
+                    Set(St.Pet, 1.6);
+                    Say(Pick(PetLines), 2);
+                }
+            }
+        }
+
+        bool atLegs = !IsSitting(state) && state != St.Pet && Math.Abs(cx - x) < 8 * u && cy > y - 2.5 * u && cy < y + 1.5 * u;
+        // Only a sharp sideways flick knocks it over; moving the mouse past its feet does not.
+        if (atLegs && Math.Abs(sweepX) > 2000 && Math.Abs(sweepX) > 2 * Math.Abs(sweepY))
+        {
+            view.TripDir = sweepX > 0 ? 1 : -1;
+            Set(St.Trip, PetView.TripSeconds);
+            Say(Pick(TripLines), 2);
+        }
+    }
+
+    // Gets out of the way when the text being typed is under the pet.
+    void TickTyping()
+    {
+        if (!activity.Typing || t < nextDodge || state == St.Drag || state == St.Fall || state == St.Hide) return;
+        Rect c;
+        if (!activity.TryCaret(out c)) return;
+        double px = (c.X + c.Width / 2) / sx, py = (c.Y + c.Height / 2) / sy;
+        if (px < x - W / 2 - 20 || px > x + W / 2 + 20 || py < y - H - 10 || py > y + 10) return;
+
+        nextDodge = t + 6;
+        Rect m = MonitorAt(x, y - H / 2, true);
+        int away = x >= px ? 1 : -1;
+        if (x + away * 260 > m.Right || x + away * 260 < m.Left) away = -away;
+        Log.Write("DODGE the text caret at ({0:0},{1:0})", c.X, c.Y);
+        StartFall();
+        vx = away * 460;
+        vy = -560;
+        ignoreWindows = true;
+        thrown = false;
+        hoverUntil = 0;
+        Say(Pick(SorryLines), 3);
+    }
+
+    // ---- Fetch.
+
+    string Play(int index)
+    {
+        return PlayLines[english ? 1 : 0][index];
+    }
+
+    // Keepy-uppy: the ball drops from above the pet and has to be clicked
+    // back up before it lands.
+    void StartJuggle()
+    {
+        if (state == St.Hide) EndHide();
+        if (ball == null) ball = new BallWindow(delegate { GrabBall(); }, delegate { EndBall(); });
+        if (state == St.Chase || state == St.Fetch) Set(St.Idle, 1);
+        bx = x;
+        by = y - H - 8 * u;
+        bvx = 0;
+        bvy = -700;
+        ballSt = BallSt.Free;
+        ballSince = t;
+        wantBall = false;
+        juggling = true;
+        juggleCount = 0;
+        PlaceBall();
+        ball.Show();
+        Say(Play(21), 3);
+    }
+
+    void StartBall()
+    {
+        if (state == St.Hide) EndHide();
+        juggling = false;
+        if (ball == null) ball = new BallWindow(delegate { GrabBall(); }, delegate { EndBall(); });
+        Rect wa = MonitorAt(x, y - H / 2, true);
+        bx = Math.Max(wa.Left + 30, Math.Min(wa.Right - 30, x + (x < (wa.Left + wa.Right) / 2 ? 14 : -14) * u));
+        by = wa.Bottom - BallWindow.Radius;
+        bvx = 0;
+        bvy = 0;
+        ballSt = BallSt.Rest;
+        ballSince = t;
+        wantBall = false;
+        PlaceBall();
+        ball.Show();
+        Say(Play(0), 3);
+    }
+
+    void EndBall()
+    {
+        if (ballSt == BallSt.None) return;
+        ballSt = BallSt.None;
+        wantBall = false;
+        juggling = false;
+        ball.Hide();
+        if (state == St.Chase || state == St.Fetch) Set(St.Idle, 1);
+    }
+
+    void GrabBall()
+    {
+        if (ballSt == BallSt.None || ballSt == BallSt.Carried || juggling) return;
+        ballSt = BallSt.Held;
+        ballPrevX = bx;
+        ballPrevY = by;
+        bvx = 0;
+        bvy = 0;
+    }
+
+    // The ball has left the hand: the pet goes after it, jumping down first
+    // if it sits somewhere high.
+    void ThrowBall()
+    {
+        ballSt = BallSt.Free;
+        ballSince = t;
+        wantBall = true;
+        bvx = Math.Max(-1800, Math.Min(1800, bvx));
+        bvy = Math.Max(-1800, Math.Min(1800, bvy));
+        if (state == St.Drag || state == St.Fall) return;
+        if (state == St.Hide) EndHide();
+        if (!Grounded || surf != IntPtr.Zero)
+        {
+            StartFall();
+            ignoreWindows = true;
+        }
+        else Set(St.Chase, 30);
+    }
+
+    void PlaceBall()
+    {
+        ball.Left = Math.Round((bx - BallWindow.Radius) * sx) / sx;
+        ball.Top = Math.Round((by - BallWindow.Radius) * sy) / sy;
+    }
+
+    void TickBall(double dt, double cx, double cy, bool down)
+    {
+        if (ballSt == BallSt.None) return;
+        Rect wa = MonitorAt(bx, Math.Max(by - 1, SystemParameters.VirtualScreenTop), true);
+        double floor = wa.Bottom - BallWindow.Radius;
+
+        if (juggling)
+        {
+            // A click anywhere near the ball counts: it is a small, fast target.
+            if (down && !wasDown && Math.Abs(cx - bx) < 50 && Math.Abs(cy - by) < 50)
+            {
+                bvx = Math.Max(-420, Math.Min(420, (bx - cx) * 22)) + (rng.NextDouble() - 0.5) * 140;
+                bvy = -1000;
+                juggleCount++;
+                Say(juggleCount.ToString(), 1);
+            }
+            if (Grounded) view.Look = bx > x + 2 * u ? 1 : bx < x - 2 * u ? -1 : 0;
+        }
+        wasDown = down;
+
+        if (ballSt == BallSt.Held)
+        {
+            bx = cx;
+            by = cy;
+            if (dt > 0)
+            {
+                bvx = 0.7 * bvx + 0.3 * (bx - ballPrevX) / dt;
+                bvy = 0.7 * bvy + 0.3 * (by - ballPrevY) / dt;
+            }
+            ballPrevX = bx;
+            ballPrevY = by;
+            if (!down) ThrowBall();
+        }
+        else if (ballSt == BallSt.Free)
+        {
+            bvy = Math.Min(2600, bvy + (juggling ? 1300 : 2200) * dt);
+            bx += bvx * dt;
+            by += bvy * dt;
+            if (juggling && by >= floor)
+            {
+                // It touched the ground: the round is over, the ball stays to be thrown.
+                juggling = false;
+                bool record = juggleCount > juggleBest && juggleCount > 1;
+                juggleBest = Math.Max(juggleBest, juggleCount);
+                Say(string.Format(Play(12), juggleCount) + (record ? " " + Play(22) : ""), 3.5);
+                if (record && Grounded) Set(St.Celebrate, 2.5);
+            }
+            if (bx < wa.Left + BallWindow.Radius || bx > wa.Right - BallWindow.Radius)
+            {
+                bx = Math.Max(wa.Left + BallWindow.Radius, Math.Min(wa.Right - BallWindow.Radius, bx));
+                bvx = -bvx * 0.7;
+            }
+            if (by >= floor)
+            {
+                by = floor;
+                bvy = Math.Abs(bvy) > 140 ? -bvy * 0.55 : 0;
+                bvx *= Math.Max(0, 1 - 3 * dt);
+                if (bvy == 0 && Math.Abs(bvx) < 25)
+                {
+                    bvx = 0;
+                    ballSt = BallSt.Rest;
+                }
+            }
+        }
+        else if (ballSt == BallSt.Rest && !wantBall && t - ballSince > 60)
+        {
+            Say(Play(3), 3);
+            EndBall();
+            return;
+        }
+
+        bool shown = ballSt != BallSt.Carried;
+        if (shown != ball.IsVisible)
+        {
+            if (shown) ball.Show();
+            else ball.Hide();
+        }
+        if (shown) PlaceBall();
+    }
+
+    // ---- Tag.
+
+    void StartTag()
+    {
+        if (state == St.Drag || state == St.Fall) return;
+        if (state == St.Hide) EndHide();
+        EndBall();
+        // It needs room to run, so it comes down to the taskbar first.
+        if (surf != IntPtr.Zero || !Grounded)
+        {
+            tagPending = true;
+            StartFall();
+            ignoreWindows = true;
+        }
+        else BeginTag();
+    }
+
+    void BeginTag()
+    {
+        tagPending = false;
+        tagStart = t;
+        dashUntil = 0;
+        Set(St.Flee, 30);
+        Say(Play(9), 2.5);
+    }
+
+    // ---- The reaction game.
+
+    void StartReaction()
+    {
+        if (!Grounded) return;
+        if (state == St.Hide) EndHide();
+        readyPhase = 0;
+        goAt = t + 2 + rng.NextDouble() * 4;
+        Set(St.Ready, 20);
+        Say(Play(13), 20);
+    }
+
+    // ---- Rock, paper, scissors. A sign beats the one after it: 0 rock,
+    // 1 scissors, 2 paper.
+
+    void PlayCards(int mine)
+    {
+        int its = rng.Next(3);
+        cardSign = its;
+        cardUntil = t + 3.5;
+        string result = Play(18);
+        if ((mine + 1) % 3 == its)
+        {
+            myWins++;
+            result = Play(20);
+        }
+        else if ((its + 1) % 3 == mine)
+        {
+            itsWins++;
+            result = Play(19);
+        }
+        Say(string.Format("{0}! {1} {2}:{3}", SignNames[english ? 1 : 0][its], result, itsWins, myWins), 3.5);
+    }
+
+    // ---- Hide-and-seek.
+
+    void StartHide()
+    {
+        if (state == St.Drag || state == St.Fall) return;
+        EndBall();
+        Set(St.Hide, 80);
+        hidePhase = 0;
+        Say(Play(4), 1.6);
+    }
+
+    // Picks a spot to peek from: over the top edge of some window, or over
+    // the taskbar.
+    void HideSomewhere()
+    {
+        LetGo();
+        List<WinInfo> tops = new List<WinInfo>();
+        for (int i = 0; i < wins.Count; i++)
+        {
+            WinInfo w = wins[i];
+            if (!w.Zoomed && w.R.Width > W + 4 * u && w.R.Top - 9 * u >= SystemParameters.VirtualScreenTop) tops.Add(w);
+        }
+        bool behindWindow = tops.Count > 0 && rng.NextDouble() < 0.7;
+        for (int attempt = 0; behindWindow && attempt < 6; attempt++)
+        {
+            WinInfo w = tops[rng.Next(tops.Count)];
+            double px = w.R.Left + W / 2 + rng.NextDouble() * (w.R.Width - W);
+            if (!VisibleAt(w.H, px, w.R.Top + 3)) continue;
+            surf = w.H;
+            surfRect = w.R;
+            x = px;
+            y = w.R.Top + (PetView.Rows - PetView.PeekRows) * u;
+            return;
+        }
+        ground = SystemParameters.WorkArea;
+        x = ground.Left + W + rng.NextDouble() * Math.Max(1, ground.Width - 2 * W);
+        y = ground.Bottom + (PetView.Rows - PetView.PeekRows) * u;
+    }
+
+    // Steps out from behind its cover and stands on it.
+    void EndHide()
+    {
+        Opacity = 1;
+        if (hidePhase == 1) y = surf != IntPtr.Zero ? surfRect.Top : ground.Bottom;
+        hidePhase = 0;
+        Set(St.Idle, 1.5);
+    }
+
+    void TickHide()
+    {
+        if (hidePhase == 0)
+        {
+            // Says its line, vanishes, and a moment later is somewhere else.
+            if (stateT > 1.6 && Opacity > 0) Opacity = 0;
+            if (stateT < 3.4) return;
+            ScanWindows();
+            HideSomewhere();
+            hidePhase = 1;
+            hideStart = t;
+            nextHint = t + 14;
+            bubbleEnd = 0;
+            Opacity = 1;
+            return;
+        }
+
+        double sunk = (PetView.Rows - PetView.PeekRows) * u;
+        if (surf != IntPtr.Zero)
+        {
+            // Its cover moved away or got covered itself: find another.
+            if (!TrackSurface(false) || !VisibleAt(surf, x, surfRect.Top + 3))
+            {
+                HideSomewhere();
+                return;
+            }
+            y = surfRect.Top + sunk;
+        }
+        else y = ground.Bottom + sunk;
+
+        if (t >= nextLook)
+        {
+            view.Look = rng.Next(3) - 1;
+            nextLook = t + 0.8 + rng.NextDouble() * 1.5;
+        }
+        if (t >= nextHint)
+        {
+            Say(Play(5), 1.5);
+            nextHint = t + 12;
+        }
+        if (t - hideStart > 60)
+        {
+            EndHide();
+            Say(Play(6), 3);
+        }
+    }
+
     void Click()
     {
-        if (state == St.Fall) return;
+        if (state == St.Hide)
+        {
+            if (hidePhase == 0) return;
+            double seconds = t - hideStart;
+            EndHide();
+            Say(string.Format(Play(7), Math.Round(seconds)), 3.5);
+            Set(St.Celebrate, 2.5);
+            return;
+        }
+        if (state == St.Flee)
+        {
+            Say(string.Format(Play(10), Math.Round(t - tagStart)), 3.5);
+            Set(St.Dizzy, 2);
+            return;
+        }
+        if (state == St.Ready)
+        {
+            if (readyPhase == 0) Say(Play(16), 2.5);
+            else
+            {
+                double ms = Math.Round((t - goAt) * 1000);
+                bool record = bestReaction == 0 || ms < bestReaction;
+                if (record) bestReaction = ms;
+                Say(string.Format(Play(15), ms) + (record ? " " + Play(22) : ""), 3.5);
+            }
+            Set(St.Wave, 1.5);
+            return;
+        }
+        if (state == St.Fall || state == St.Trip) return;
         if (state == St.Hang || state == St.Cling)
         {
             Say(Pick(HangLines), 2.5);
@@ -1897,8 +2644,9 @@ class Pet : Window
     // Picks up a change in what the person is doing, or a new track or video.
     void UpdateContext()
     {
-        // In the air there is no reacting; the change is picked up after landing.
-        if (state == St.Drag || state == St.Fall) return;
+        // In the air or in the middle of a game there is no reacting; the
+        // change is picked up afterwards.
+        if (state == St.Drag || state == St.Fall || state == St.Hide || state == St.Chase || state == St.Fetch || state == St.Flee || state == St.Ready) return;
         Ctx now = activity.Context;
         string title = activity.Title;
         if (now == ctx && title == ctxTitle) return;
@@ -1984,7 +2732,9 @@ class Pet : Window
         Cursor_(out cx, out cy);
         if (pressed)
         {
-            if (!down)
+            // Hidden, any touch finds it; there is no picking it up.
+            // In tag and in the reaction game the press itself is the catch.
+            if (!down || state == St.Hide || state == St.Flee || state == St.Ready)
             {
                 pressed = false;
                 Click();
@@ -1998,11 +2748,14 @@ class Pet : Window
 
         // Never stay untouchable if an answer fails to come back.
         if (seeThrough && state != St.Drag && t >= seeThroughOff) SeeThrough(false);
+        TickBall(dt, cx, cy, down);
+        TickTouch(dt, cx, cy, down);
+        TickTyping();
         if (follow) UpdateContext();
         if (t >= nextExercise)
         {
             nextExercise = t + 2700;
-            if (Grounded && ctx != Ctx.Away)
+            if (Grounded && ctx != Ctx.Away && state != St.Hide && state != St.Chase && state != St.Fetch && state != St.Flee && state != St.Ready)
             {
                 Set(St.Exercise, 5);
                 Say(Misc(8), 3.5);
@@ -2013,6 +2766,7 @@ class Pet : Window
         else if (state == St.Fall) TickFall(dt);
         else if (state == St.Hang) TickHang();
         else if (state == St.Cling) TickCling(dt);
+        else if (state == St.Hide) TickHide();
         else TickGround(dt);
 
         if (chatty && t >= nextChat && t >= bubbleEnd)
@@ -2052,6 +2806,8 @@ class Pet : Window
         view.Side = clingSide;
         view.Climbing = climbDir != 0;
         view.Squash = squash;
+        view.Peek = state == St.Hide && hidePhase == 1;
+        view.Sign = state == St.Ready && readyPhase == 1 ? 3 : t < cardUntil ? cardSign : -1;
         view.Text = text;
         view.InvalidateVisual();
     }
@@ -2226,6 +2982,84 @@ class Pet : Window
             {
                 if (state == St.Search) Say(Pick(FoundLines), 2.5);
                 Set(St.Idle, 1 + rng.NextDouble() * 3);
+            }
+        }
+        else if (state == St.Flee)
+        {
+            double mx, my;
+            Cursor_(out mx, out my);
+            double gap = x - mx;
+            if (t < dashUntil) x += dir * 110 * u * dt;
+            else if (Math.Abs(gap) < 45 * u && Math.Abs(my - (y - H / 2)) < 60 * u)
+            {
+                dir = gap >= 0 ? 1 : -1;
+                // Cornered, it darts back past the mouse instead.
+                if ((dir > 0 && x >= hi - 2) || (dir < 0 && x <= lo + 2))
+                {
+                    dir = -dir;
+                    dashUntil = t + 0.8;
+                }
+                x += dir * 55 * u * dt;
+            }
+            view.Look = mx > x ? 1 : -1;
+            if (stateT > stateDur)
+            {
+                Say(Play(11), 3);
+                Set(St.Celebrate, 2.5);
+            }
+        }
+        else if (state == St.Ready)
+        {
+            if (readyPhase == 0 && t >= goAt)
+            {
+                readyPhase = 1;
+                hopT = 0;
+                Say(Play(14), 3);
+            }
+            else if (readyPhase == 1 && t > goAt + 3)
+            {
+                Say(Play(17), 2.5);
+                Set(St.Idle, 1);
+            }
+        }
+        else if (state == St.Chase)
+        {
+            // Runs to the ball and picks it up once it is low enough to reach.
+            dir = bx >= x ? 1 : -1;
+            view.Look = dir;
+            if (Math.Abs(bx - x) > 3 * u) x += dir * 48 * u * dt;
+            else if (by > y - 6 * u && ballSt != BallSt.Held)
+            {
+                double cx, cy;
+                Cursor_(out cx, out cy);
+                ballSt = BallSt.Carried;
+                wantBall = false;
+                fetched++;
+                walkTarget = hi > lo ? Math.Max(lo, Math.Min(hi, cx)) : x;
+                dir = walkTarget >= x ? 1 : -1;
+                Say(Play(1), 1.5);
+                Set(St.Fetch, 20);
+            }
+            if (ballSt == BallSt.None || stateT > stateDur) Set(St.Idle, 1);
+        }
+        else if (state == St.Fetch)
+        {
+            // Carries the ball to where the mouse was and puts it down.
+            x += dir * 16 * u * dt;
+            view.Look = dir;
+            bx = x + dir * 8 * u;
+            by = y - 5 * u;
+            bool arrived = dir > 0 ? x >= walkTarget : x <= walkTarget;
+            if (arrived || x <= lo || x >= hi || stateT > stateDur)
+            {
+                Rect wa = MonitorAt(x, y - 1, true);
+                bx = Math.Max(wa.Left + 30, Math.Min(wa.Right - 30, x + dir * 10 * u));
+                by = wa.Bottom - BallWindow.Radius;
+                ballSt = BallSt.Rest;
+                ballSince = t;
+                Say(fetched % 3 == 0 ? string.Format(Play(8), fetched) : Play(2), 2.5);
+                hopT = 0;
+                Set(St.Wave, 1.5);
             }
         }
         else if (state == St.Sit)
