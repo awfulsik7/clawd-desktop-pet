@@ -5,157 +5,166 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claw'd на рабочем столе</title>
 <meta name="description" content="Неофициальный питомец Claw'd для Windows: ходит по панели задач, сидит на окнах и кнопках, слушает музыку вместе с тобой.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #1f1e1d;
-    --panel: #2a2826;
-    --line: #3d3a37;
-    --ink: #faf9f5;
-    --dim: #b5b0a6;
+    --paper: #f0eee6;
+    --paper-2: #e6e3d8;
+    --ink: #1a1915;
+    --dim: #6b675d;
     --clay: #d77757;
     --clay-dark: #b85f42;
-    --clay-light: #e89a7c;
-    --px: 4px;
+    --bar: 46px;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0;
-    background: var(--bg);
+    padding-bottom: calc(var(--bar) + 40px);
+    background: var(--paper);
+    /* Graph paper, faint enough to read over. */
+    background-image:
+      linear-gradient(rgba(26, 25, 21, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(26, 25, 21, 0.045) 1px, transparent 1px);
+    background-size: 24px 24px;
     color: var(--ink);
     font: 17px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
   }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
-  h1, h2 { font-family: Georgia, "Times New Roman", serif; font-weight: 600; line-height: 1.15; margin: 0; }
-  h1 { font-size: clamp(36px, 7vw, 64px); letter-spacing: -0.01em; }
-  h2 { font-size: clamp(26px, 4vw, 36px); margin-bottom: 28px; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  .pix { font-family: "Press Start 2P", "Courier New", monospace; }
+  h1, h2 { font-family: "Press Start 2P", "Courier New", monospace; font-weight: 400; margin: 0; }
+  h1 { font-size: clamp(20px, 3.6vw, 34px); line-height: 1.55; }
+  h2 { font-size: clamp(15px, 2.2vw, 20px); line-height: 1.6; margin-bottom: 8px; }
   p { margin: 0; }
-  a { color: var(--clay-light); }
+  a { color: var(--clay-dark); }
+  canvas { image-rendering: pixelated; display: block; }
 
-  /* Blocky corners, the same trick as the pet's speech bubble. */
-  .pixel {
-    clip-path: polygon(
-      0 var(--px), var(--px) var(--px), var(--px) 0,
-      calc(100% - var(--px)) 0, calc(100% - var(--px)) var(--px), 100% var(--px),
-      100% calc(100% - var(--px)), calc(100% - var(--px)) calc(100% - var(--px)), calc(100% - var(--px)) 100%,
-      var(--px) 100%, var(--px) calc(100% - var(--px)), 0 calc(100% - var(--px)));
-  }
+  .tag { font-size: 10px; color: var(--clay-dark); letter-spacing: 0.04em; margin-bottom: 22px; }
+  .lede { font-size: 19px; max-width: 30em; margin: 22px 0 30px; }
+  .sub { color: var(--dim); max-width: 36em; margin-bottom: 36px; }
 
-  header { padding: 72px 0 0; text-align: center; overflow: hidden; }
-  .lede { color: var(--dim); font-size: 20px; max-width: 620px; margin: 20px auto 32px; }
-  .button {
+  /* Hard offset shadows instead of soft ones: the page is pixel art too. */
+  .btn {
     display: inline-block;
     background: var(--clay);
-    color: #1a1915;
-    font-weight: 700;
-    font-size: 19px;
+    color: var(--ink);
+    font-size: 13px;
     text-decoration: none;
-    padding: 16px 34px;
-    transition: background 0.15s, transform 0.15s;
+    padding: 18px 22px;
+    border: 3px solid var(--ink);
+    box-shadow: 6px 6px 0 var(--ink);
+    transition: transform 0.08s, box-shadow 0.08s;
   }
-  .button:hover { background: var(--clay-light); transform: translateY(-2px); }
-  .note { color: var(--dim); font-size: 14px; margin-top: 14px; }
+  .btn:hover { transform: translate(2px, 2px); box-shadow: 4px 4px 0 var(--ink); }
+  .btn:active { transform: translate(6px, 6px); box-shadow: 0 0 0 var(--ink); }
+  .meta { color: var(--dim); font-size: 14px; margin-top: 20px; }
 
-  /* The stage: a strip of desktop with a taskbar for the pet to stand on. */
-  .stage { position: relative; height: 230px; margin-top: 40px; }
-  .taskbar {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 46px;
-    background: var(--panel); border-top: 1px solid var(--line);
-  }
-  .pet { position: absolute; bottom: 46px; left: 50%; width: 144px; margin-left: -72px; animation: stroll 14s ease-in-out infinite; }
-  .pet svg { display: block; width: 100%; height: auto; shape-rendering: crispEdges; overflow: visible; }
-  .bubble {
-    position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%);
-    background: var(--ink); color: #1a1915; font: 600 15px Georgia, serif;
-    padding: 6px 14px; white-space: nowrap;
-  }
-  .bubble::after {
-    content: ""; position: absolute; left: 50%; bottom: -8px; margin-left: -6px;
-    border: 6px solid transparent; border-top-color: var(--ink); border-bottom: 0;
-  }
-  .body { animation: breathe 1.3s steps(1) infinite; }
-  .eye { animation: blink 4s steps(1) infinite; transform-box: fill-box; transform-origin: center; }
-  .arm-wave { animation: wave 0.45s steps(1) infinite; }
-  .leg-a { animation: step 0.3s steps(1) infinite; }
-  .leg-b { animation: step 0.3s steps(1) infinite 0.15s; }
-  @keyframes stroll { 0%, 100% { transform: translateX(-180px); } 50% { transform: translateX(180px); } }
-  @keyframes breathe { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-0.2px); } }
-  @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.2); } }
-  @keyframes wave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
-  @keyframes step { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
-  @media (prefers-reduced-motion: reduce) {
-    .pet, .body, .eye, .arm-wave, .leg-a, .leg-b { animation: none; }
-  }
+  .hero { display: grid; grid-template-columns: 1.15fr 1fr; gap: 48px; align-items: center; padding: 84px 0 96px; }
+  .win { border: 3px solid var(--ink); background: #fff; box-shadow: 8px 8px 0 var(--ink); position: relative; }
+  .win-bar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--ink); color: var(--paper); font-size: 9px; }
+  .win-bar i { width: 9px; height: 9px; background: var(--paper); margin-left: auto; }
+  .win-bar i + i { margin-left: 0; }
+  .win-body { padding: 18px; display: grid; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px; background: var(--paper); border: 2px solid var(--ink); font-size: 14px; }
+  .row b { width: 34px; height: 34px; background: var(--clay); border: 2px solid var(--ink); flex: none; }
+  .row span { color: var(--dim); margin-left: auto; font-size: 13px; }
+  .hanger { position: absolute; top: -45px; right: 110px; pointer-events: none; }
 
-  section { padding: 72px 0; border-top: 1px solid var(--line); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-  .card { background: var(--panel); padding: 24px; }
-  .card h3 { margin: 0 0 8px; font-size: 19px; color: var(--clay-light); }
-  .card p { color: var(--dim); font-size: 16px; }
+  section { padding: 76px 0; border-top: 3px solid var(--ink); }
+  .moods { display: grid; grid-template-columns: 1fr 1fr; column-gap: 48px; }
+  .mood { display: flex; align-items: flex-end; gap: 20px; padding: 18px 0; border-bottom: 2px dotted rgba(26, 25, 21, 0.35); }
+  .mood canvas { flex: none; }
+  .mood strong { display: block; font-size: 17px; }
+  .mood span { color: var(--dim); font-size: 15px; }
 
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 12px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  td:first-child { color: var(--dim); width: 46%; }
-  ol { margin: 0; padding-left: 22px; }
-  li { margin-bottom: 10px; }
-  code { background: var(--panel); padding: 2px 7px; font: 15px Consolas, monospace; }
+  .play { display: grid; grid-template-columns: 220px 1fr; gap: 28px; align-items: start; }
+  .cover {
+    aspect-ratio: 1; border: 3px solid var(--ink); box-shadow: 6px 6px 0 var(--ink);
+    background: repeating-linear-gradient(45deg, var(--clay) 0 14px, var(--clay-dark) 14px 28px);
+    display: flex; align-items: flex-end; padding: 12px; font-size: 9px; color: var(--paper);
+  }
+  .tracks { display: grid; gap: 10px; }
+  .hint { font-size: 10px; line-height: 1.9; color: var(--clay-dark); margin-bottom: 26px; }
 
-  footer { padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--dim); font-size: 14px; }
+  ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: n; }
+  ol.steps li { display: grid; grid-template-columns: 56px 1fr; gap: 18px; align-items: start; counter-increment: n; }
+  ol.steps li::before {
+    content: counter(n); font: 20px "Press Start 2P", monospace;
+    width: 56px; height: 56px; display: grid; place-items: center;
+    background: var(--ink); color: var(--paper);
+  }
+  ol.steps p { padding-top: 4px; }
+  code { background: var(--paper-2); border: 1px solid rgba(26, 25, 21, 0.25); padding: 1px 6px; font: 15px Consolas, monospace; }
+
+  footer { padding: 36px 0 20px; border-top: 3px solid var(--ink); color: var(--dim); font-size: 14px; }
   footer p + p { margin-top: 8px; }
+
+  /* The strip the pet lives on, pinned to the bottom like a real taskbar. */
+  .taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--bar); z-index: 5;
+    background: var(--ink); color: var(--paper);
+    display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 9px;
+  }
+  .taskbar i { width: 18px; height: 18px; background: var(--paper); opacity: 0.85; }
+  .taskbar i.on { background: var(--clay); opacity: 1; }
+  .taskbar time { margin-left: auto; }
+
+  #pet { position: fixed; left: 0; top: 0; z-index: 6; touch-action: none; cursor: grab; user-select: none; will-change: transform; }
+  #pet.held { cursor: grabbing; }
+  #say {
+    position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%); margin-bottom: -22px;
+    background: #fff; color: var(--ink); border: 3px solid var(--ink);
+    font: 600 14px Georgia, serif; padding: 4px 11px; white-space: nowrap; pointer-events: none;
+  }
+  #say:empty { display: none; }
+  #say::after { content: ""; position: absolute; left: 50%; top: 100%; margin-left: -5px; width: 10px; height: 6px; background: var(--ink); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+
+  @media (max-width: 820px) {
+    .hero { grid-template-columns: 1fr; padding: 56px 0 72px; }
+    .moods { grid-template-columns: 1fr; }
+    .play { grid-template-columns: 1fr; }
+    .cover { max-width: 220px; }
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="wrap">
-    <h1>Claw'd на рабочем столе</h1>
-    <p class="lede">Маленький пиксельный питомец для Windows. Ходит по панели задач, садится на окна и кнопки, слушает музыку вместе с тобой и иногда что-нибудь говорит.</p>
-    <a class="button pixel" href="https://github.com/awfulsik7/clawd-desktop-pet/releases/latest/download/Clawd.exe">Скачать для Windows</a>
-    <p class="note">Бесплатно · один файл, без установки · Windows 10 и 11</p>
-  </div>
-
-  <div class="stage" aria-hidden="true">
-    <div class="pet">
-      <div class="bubble pixel">привет!</div>
-      <svg viewBox="0 0 18 14" xmlns="http://www.w3.org/2000/svg">
-        <g fill="#d77757">
-          <rect class="leg-a" x="4" y="12" width="1" height="2"/>
-          <rect class="leg-b" x="6" y="12" width="1" height="2"/>
-          <rect class="leg-a" x="11" y="12" width="1" height="2"/>
-          <rect class="leg-b" x="13" y="12" width="1" height="2"/>
-        </g>
-        <g class="body">
-          <rect x="3" y="4" width="12" height="8" fill="#d77757"/>
-          <rect x="3" y="4" width="11.5" height="0.5" fill="#e89a7c"/>
-          <rect x="14.5" y="4" width="0.5" height="8" fill="#b85f42"/>
-          <rect x="3" y="11.5" width="12" height="0.5" fill="#b85f42"/>
-          <rect x="1" y="8" width="2" height="2" fill="#d77757"/>
-          <rect x="1" y="9.5" width="2" height="0.5" fill="#b85f42"/>
-          <g class="arm-wave">
-            <rect x="15" y="4" width="2" height="3" fill="#d77757"/>
-            <rect x="15" y="6.5" width="2" height="0.5" fill="#b85f42"/>
-          </g>
-          <rect class="eye" x="5" y="6" width="1" height="2" fill="#1a1915"/>
-          <rect class="eye" x="12" y="6" width="1" height="2" fill="#1a1915"/>
-          <rect x="5" y="6" width="0.5" height="0.5" fill="#fff"/>
-          <rect x="12" y="6" width="0.5" height="0.5" fill="#fff"/>
-        </g>
-      </svg>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <p class="pix tag">НЕОФИЦИАЛЬНЫЙ ПИТОМЕЦ ДЛЯ WINDOWS</p>
+      <h1 data-seat>Claw'd живёт у&nbsp;тебя на&nbsp;панели задач</h1>
+      <p class="lede">Ходит туда-сюда, садится на окна и кнопки, надевает наушники, когда ты включаешь музыку. Иногда что-нибудь говорит.</p>
+      <a class="btn pix" data-seat href="https://github.com/awfulsik7/clawd-desktop-pet/releases/latest/download/Clawd.exe">СКАЧАТЬ .EXE</a>
+      <p class="meta">Бесплатно. Один файл на 70 КБ, ставить ничего не надо. Windows 10 и 11.</p>
     </div>
-    <div class="taskbar"></div>
+
+    <div class="win" aria-hidden="true">
+      <canvas class="mini hanger" data-state="hang" data-u="5"></canvas>
+      <div class="win-bar pix" data-seat>МУЗЫКА<i></i><i></i></div>
+      <div class="win-body">
+        <div class="row" data-seat><b></b>Трек, который сейчас играет<span>2:01</span></div>
+        <div class="row" data-seat><b></b>Следующий трек<span>3:14</span></div>
+        <div class="row" data-seat><b></b>И ещё один<span>2:47</span></div>
+      </div>
+    </div>
   </div>
-</header>
+</div>
 
 <section>
   <div class="wrap">
-    <h2>Что он умеет</h2>
-    <div class="grid">
-      <div class="card pixel"><h3>Живёт на экране</h3><p>Гуляет по панели задач, сидит, спит в ночном колпаке, потягивается и машет лапкой.</p></div>
-      <div class="card pixel"><h3>Садится куда положишь</h3><p>Перетащи его на кнопку, обложку альбома или строку списка — он присядет там и поедет вместе с ней.</p></div>
-      <div class="card pixel"><h3>Цепляется за окна</h3><p>Висит на верхнем крае окна, держится за бок, ползёт вверх по краю экрана.</p></div>
-      <div class="card pixel"><h3>Повторяет за тобой</h3><p>Музыка — надевает наушники и называет трек. Видео — берёт попкорн. Игра — достаёт геймпад.</p></div>
-      <div class="card pixel"><h3>Занят делом</h3><p>Кодит на ноутбуке, читает, пьёт кофе, ищет баги с лупой, делает зарядку и празднует.</p></div>
-      <div class="card pixel"><h3>Разговаривает</h3><p>Короткие реплики в пиксельном облачке. Можно выключить одной галочкой.</p></div>
+    <h2>Попробуй прямо тут</h2>
+    <p class="sub">Внизу страницы ходит Claw'd. Возьми его мышкой и посади на обложку, на трек или на любую кнопку. В настоящей программе он делает то же самое, только на твоих окнах.</p>
+    <div class="play">
+      <div class="cover pix" data-seat>ОБЛОЖКА</div>
+      <div class="tracks">
+        <p class="pix hint">ТАЩИ ЕГО СЮДА ↓</p>
+        <div class="row" data-seat><b></b>Сядет на край, если бросить у края<span>край</span></div>
+        <div class="row" data-seat><b></b>Сядет где положил, если бросить в середину<span>середина</span></div>
+        <div class="row" data-seat><b></b>Упадёт на панель, если бросить мимо<span>мимо</span></div>
+      </div>
     </div>
   </div>
 </section>
@@ -163,37 +172,318 @@
 <section>
   <div class="wrap">
     <h2>Он замечает, чем ты занят</h2>
-    <table>
-      <tr><td>Слушаешь музыку</td><td>В наушниках, называет трек или исполнителя</td></tr>
-      <tr><td>Смотришь видео</td><td>С попкорном, комментирует</td></tr>
-      <tr><td>Играешь на весь экран</td><td>С геймпадом, язык наружу</td></tr>
-      <tr><td>Пишешь код</td><td>Кодит рядом</td></tr>
-      <tr><td>Сидишь в мессенджере</td><td>С телефоном</td></tr>
-      <tr><td>Отошёл от компьютера</td><td>Спит, а потом говорит «с возвращением!»</td></tr>
-    </table>
-    <p class="note">Для этого он читает заголовки окон и название того, что играет. Всё остаётся на твоём компьютере: в интернет питомец не выходит вообще.</p>
+    <p class="sub">Раз в пару секунд смотрит, что играет и какое окно открыто. Заголовки окон он читает, но никуда не отправляет: в интернет программа не ходит вообще.</p>
+    <div class="moods">
+      <div class="mood"><canvas class="mini" data-state="music"></canvas><div><strong>Включил музыку</strong><span>Наушники, ноты и «о, хороший трек»</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="watch"></canvas><div><strong>Смотришь видео</strong><span>Сидит с попкорном и комментирует</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="game"></canvas><div><strong>Играешь на весь экран</strong><span>Достаёт геймпад, язык наружу</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="code"></canvas><div><strong>Пишешь код</strong><span>Кодит рядом на своём ноутбуке</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="phone"></canvas><div><strong>Сидишь в мессенджере</strong><span>Тоже кому-то пишет</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="sleep"></canvas><div><strong>Отошёл от компьютера</strong><span>Спит в колпаке, пока не вернёшься</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="coffee"></canvas><div><strong>Ничего не происходит</strong><span>Пьёт кофе, читает, ищет баги с лупой</span></div></div>
+      <div class="mood"><canvas class="mini" data-state="dance"></canvas><div><strong>Просто так</strong><span>Танцует. Причина не нужна</span></div></div>
+    </div>
   </div>
 </section>
 
 <section>
   <div class="wrap">
     <h2>Как запустить</h2>
-    <ol>
-      <li>Скачай <code>Clawd.exe</code> и запусти его. Claw'd упадёт сверху на панель задач.</li>
-      <li>Windows может показать предупреждение «Система Windows защитила ваш компьютер»: у файла нет платной цифровой подписи. Нажми «Подробнее», затем «Выполнить в любом случае».</li>
-      <li>Таскай его мышкой. Правый клик открывает меню с анимациями, размером и настройками.</li>
-      <li>Чтобы убрать, запусти файл ещё раз или выбери «Убрать Claw'd» в меню.</li>
+    <p class="sub">Установщика нет. Скачал, запустил, он упал сверху на панель задач.</p>
+    <ol class="steps">
+      <li><p>Скачай <code>Clawd.exe</code> и открой его.</p></li>
+      <li><p>Windows, скорее всего, покажет синее окно «Система Windows защитила ваш компьютер». Это потому, что у файла нет платной цифровой подписи. Нажми «Подробнее», потом «Выполнить в любом случае».</p></li>
+      <li><p>Таскай его мышкой. Правый клик открывает меню: анимации, размер, выключить болтовню.</p></li>
+      <li><p>Надоел — запусти файл ещё раз, он уйдёт. Или «Убрать Claw'd» в меню.</p></li>
     </ol>
-    <p class="note">Исходный код открыт: <a href="https://github.com/awfulsik7/clawd-desktop-pet">github.com/awfulsik7/clawd-desktop-pet</a>. Программу можно собрать самому одним скриптом, без установки чего-либо.</p>
+    <p class="meta">Не доверяешь чужим .exe — правильно. <a href="https://github.com/awfulsik7/clawd-desktop-pet">Весь код открыт</a>, это один файл, и он собирается одной командой тем компилятором, который уже есть в Windows.</p>
   </div>
 </section>
 
 <footer>
   <div class="wrap">
     <p>Неофициальный фанатский проект. Не связан с Anthropic и не одобрен ею. Claw'd и Claude — товарные знаки Anthropic.</p>
-    <p>Все анимации нарисованы кодом; изображения и шрифты Anthropic в программу не входят.</p>
+    <p>Все анимации нарисованы кодом, в том числе на этой странице. Изображений и шрифтов Anthropic здесь нет.</p>
   </div>
 </footer>
 
+<div class="taskbar pix" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i><time id="clock"></time></div>
+<div id="pet"><div id="say"></div><canvas id="petCanvas"></canvas></div>
+
+<script>
+// The same sprite the program draws, ported rectangle for rectangle: a grid of
+// 18 x 14 units with details on half units, plus six rows of headroom for
+// hats and particles.
+const COLOR = {
+  body: '#d77757', shade: '#b85f42', light: '#e89a7c', eye: '#1a1915', white: '#fff', paper: '#faf9f5',
+  lid: '#c4c4c8', lidLight: '#e2e2e6', lidDark: '#787880', blue: '#4a6fa5', blueDark: '#324e78',
+  red: '#dc463c', corn: '#f2d27a', pink: '#f06e8c', green: '#6ebe78', sky: '#8cc4e6', brown: '#5a3828', zed: '#b85f42',
+}
+const HEADROOM = 6
+const SITTING = ['sit', 'sleep', 'code', 'watch', 'game', 'coffee']
+const NOTE = ['.###', '.#..', '.#..', '##..', '##..']
+const STAR = ['.#.', '###', '.#.']
+
+function drawPet(ctx, U, state, t, st, look) {
+  const R = (c, x, y, w, h) => {
+    ctx.fillStyle = c
+    ctx.fillRect(Math.round(x * U), Math.round((y + HEADROOM) * U), Math.round(w * U), Math.round(h * U))
+  }
+  const glyph = (c, x, y, rows) => rows.forEach((row, r) => [...row].forEach((ch, i) => ch === '#' && R(c, x + i * 0.5, y + r * 0.5, 0.5, 0.5)))
+  const limb = (x, y, w, h) => { R(COLOR.body, x, y, w, h); R(COLOR.shade, x, y + h - 0.5, w, 0.5) }
+  const rising = (c, rows, x, y, phase, height) => {
+    ctx.globalAlpha = 1 - phase
+    glyph(c, x + Math.round(Math.sin(phase * 6) * 1.2) / 2, y - Math.round(phase * height * 2) / 2, rows)
+    ctx.globalAlpha = 1
+  }
+
+  const sitting = SITTING.includes(state)
+  const armsUp = state === 'hang' || state === 'drag' || state === 'fall'
+  const phase = Math.floor(t * 8) % 2, beat = Math.floor(t * 4) % 2, slow = Math.floor(t * 2.5) % 2
+
+  let breath = 0
+  if (sitting || ['idle', 'wave', 'hang', 'phone'].includes(state)) breath = Math.sin(t * (state === 'sleep' ? 1.2 : 2.4)) > 0.4 ? 1 / U : 0
+  if (state === 'walk' && phase) breath = 1 / U
+  if (state === 'dance' && beat) breath = 1
+  if (state === 'music' && slow) breath = 0.5
+
+  // Sitting down takes three frames: standing, crouched, seated.
+  const sitStep = state === 'sit' && st < 0.3 ? Math.floor(st / 0.1) : 2
+  const top = (sitting ? 4 + sitStep : 4) - breath, height = 8 + breath
+  const lean = state === 'dance' ? (beat ? 1 : -1) : state === 'music' ? (slow ? 0.5 : -0.5) : 0
+  const sipping = state === 'coffee' && st % 3.5 > 2.6
+  const munching = state === 'watch' && st % 2.5 > 2
+
+  const legs = [4, 6, 11, 13]
+  if (sitting && sitStep === 2) { limb(1, 13, 2, 1); limb(15, 13, 2, 1) }
+  else if (sitting) legs.forEach(x => limb(x, 12 + sitStep, 1, 2 - sitStep))
+  else legs.forEach((x, i) => {
+    if (state === 'hang') {
+      R(COLOR.body, x, 12, 1, 1)
+      limb(x + Math.round(Math.sin(t * 2.6 + (i < 2 ? 0 : 0.6))), 13, 1, 1)
+      return
+    }
+    let len = 2
+    if (state === 'walk' && i % 2 === phase) len = 1
+    if (state === 'drag' && i % 2 === Math.floor(t * 10) % 2) len = 1
+    if (state === 'dance' && i % 2 === beat) len = 1
+    if (state === 'music' && i === 3 && slow) len = 1.5
+    limb(x, 12, 1, len)
+  })
+
+  R(COLOR.body, 3 + lean, top, 12, height)
+  R(COLOR.light, 3 + lean, top, 11.5, 0.5)
+  R(COLOR.shade, 14.5 + lean, top, 0.5, height)
+  R(COLOR.shade, 3 + lean, top + height - 0.5, 12, 0.5)
+
+  if (armsUp) { limb(1, top - 2, 2, 4); limb(15, top - 2, 2, 4) }
+  else if (state === 'wave') { limb(1, top + 4, 2, 2); limb(15, top + (Math.floor(t * 7) % 2 ? 0 : -1), 2, 3) }
+  else if (state === 'dance') {
+    limb(1 + lean, top + (beat ? 4 : -1), 2, beat ? 2 : 3)
+    limb(15 + lean, top + (beat ? -1 : 4), 2, beat ? 3 : 2)
+  }
+  else if (state === 'code' || state === 'walk') { limb(1, top + 4 - (phase ? 0 : 0.5), 2, 2); limb(15, top + 4 - (phase ? 0.5 : 0), 2, 2) }
+  else if (state === 'coffee' || state === 'watch') { limb(1, top + 4, 2, 2); limb(15, top + (sipping || munching ? 1.5 : 4), 2, 2) }
+  else if (state === 'game') { limb(2, top + 4.5 - (phase ? 0 : 0.5), 2, 2); limb(14, top + 4.5 - (phase ? 0.5 : 0), 2, 2) }
+  else if (state === 'phone') { limb(1, top + 4, 2, 2); limb(15, top + 3.5 - (phase ? 0 : 0.5), 2, 2) }
+  else if (state === 'music') { limb(1 + lean, top + 4 - (slow ? 0 : 0.5), 2, 2); limb(15 + lean, top + 4 - (slow ? 0.5 : 0), 2, 2) }
+  else { limb(1, top + 4, 2, 2); limb(15, top + 4, 2, 2) }
+
+  let eyes = 'open'
+  if (state === 'drag' || state === 'fall' || state === 'watch') eyes = 'wide'
+  if (state === 'wave' || state === 'dance' || state === 'music') eyes = 'happy'
+  if (state === 'code' || state === 'game') eyes = 'squint'
+  if (state === 'sleep' || sipping || (eyes === 'open' && t % 4 > 3.87)) eyes = 'closed'
+  const dy = state === 'code' ? 0.3 : state === 'phone' ? 0.5 : 0
+  const dx = state === 'game' ? Math.floor(t * 3) % 3 - 1 : state === 'phone' ? 1 : look
+  for (const ex of [5 + dx + lean, 12 + dx + lean]) {
+    const ey = top + 2 + dy
+    if (eyes === 'closed') R(COLOR.eye, ex - 0.25, ey + 1.3, 1.5, 0.5)
+    else if (eyes === 'happy') { R(COLOR.eye, ex, ey + 0.5, 1, 0.5); R(COLOR.eye, ex - 0.5, ey + 1, 0.5, 0.5); R(COLOR.eye, ex + 1, ey + 1, 0.5, 0.5) }
+    else if (eyes === 'wide') { R(COLOR.eye, ex - 0.25, ey - 0.25, 1.5, 2.5); R(COLOR.white, ex - 0.25, ey - 0.25, 0.5, 0.5) }
+    else if (eyes === 'squint') R(COLOR.eye, ex, ey + 0.8, 1, 1.2)
+    else { R(COLOR.eye, ex, ey, 1, 2); R(COLOR.white, ex, ey, 0.5, 0.5) }
+  }
+  if (state === 'drag' || state === 'fall') R(COLOR.eye, 8.5, top + 4.5, 1, 1)
+  if (state === 'game') R(COLOR.pink, 8.5, top + 4.5, 1, 0.5)
+
+  if (state === 'code') {
+    R(COLOR.lidDark, 4.5, 10.5, 9, 3.5); R(COLOR.lid, 5, 11, 8, 2.5); R(COLOR.lidLight, 5, 11, 8, 0.5)
+    if (Math.floor(t * 2) % 2) glyph(COLOR.body, 8.25, 11.5, STAR); else R(COLOR.body, 8.75, 12, 0.5, 0.5)
+    R(COLOR.lidDark, 3.5, 13.5, 11, 0.5)
+  } else if (state === 'watch') {
+    R(COLOR.paper, 3.5, 11, 4, 3)
+    for (const x of [4, 5.5, 7]) R(COLOR.red, x, 11, 0.5, 3)
+    R(COLOR.corn, 3.5, 10.5, 4, 0.5)
+    if (munching) R(COLOR.corn, 15.5, top + 1, 1, 0.5)
+  } else if (state === 'game') {
+    R(COLOR.lidDark, 5.5, 11, 7, 2); R(COLOR.lidDark, 5, 12, 1.5, 1.5); R(COLOR.lidDark, 11.5, 12, 1.5, 1.5)
+    R(COLOR.paper, 6.5, 11.5, 0.5, 1.5); R(COLOR.paper, 6, 12, 1.5, 0.5)
+    R(COLOR.pink, 11, 11.5, 0.5, 0.5); R(COLOR.green, 10.5, 12, 0.5, 0.5); R(COLOR.sky, 11.5, 12, 0.5, 0.5)
+  } else if (state === 'phone') {
+    R(COLOR.eye, 15, top + 0.5, 2, 3.5); R(COLOR.sky, 15.5, top + 1, 1, 2.5)
+    rising(COLOR.eye, ['####', '####', '.#..'], 14.5, top - 0.5, t * 0.6 % 1, 3.5)
+  } else if (state === 'coffee') {
+    const y = top + (sipping ? 0 : 2.5)
+    R(COLOR.paper, 15.5, y, 2, 2); R(COLOR.brown, 15.5, y, 2, 0.5); R(COLOR.lid, 15.5, y + 1.5, 2, 0.5); R(COLOR.paper, 17.5, y + 0.5, 0.5, 1)
+    if (!sipping) for (const k of [0, 1]) rising(COLOR.lidDark, ['#'], 16 + k * 0.8, top + 2, (t * 0.8 + k * 0.5) % 1, 3)
+  } else if (state === 'music') {
+    R(COLOR.eye, 3 + lean, top - 1, 12, 0.5); R(COLOR.eye, 3 + lean, top - 1, 0.5, 1.5); R(COLOR.eye, 14.5 + lean, top - 1, 0.5, 1.5)
+    for (const x of [2, 14.5]) { R(COLOR.blue, x + lean, top + 0.5, 1.5, 3); R(COLOR.blueDark, x + lean, top + 3, 1.5, 0.5) }
+    rising(COLOR.eye, NOTE, 15.5, top - 2, t * 0.45 % 1, 4)
+    rising(COLOR.eye, NOTE, 0.5, top - 2, (t * 0.45 + 0.5) % 1, 4)
+  } else if (state === 'sleep') {
+    R(COLOR.blue, 4.5, top - 1.5, 9, 1.5); R(COLOR.blue, 7, top - 2.5, 7, 1); R(COLOR.blue, 14, top - 2.5, 1.5, 2)
+    R(COLOR.paper, 3, top - 0.5, 12, 1); R(COLOR.paper, 14.5, top - 0.5, 1.5, 1.5)
+    for (let i = 0; i < Math.floor(t * 1.2) % 4; i++) {
+      const s = 0.4 + 0.15 * i, zx = 13.5 + i * 1.2, zy = 2 - i * 1.5
+      R(COLOR.zed, zx, zy, 3 * s, s); R(COLOR.zed, zx + s, zy + s, s, s); R(COLOR.zed, zx, zy + 2 * s, 3 * s, s)
+    }
+  }
+}
+
+function sizeCanvas(canvas, U) {
+  canvas.width = 18 * U
+  canvas.height = (14 + HEADROOM) * U
+  canvas.style.width = canvas.width + 'px'
+  canvas.style.height = canvas.height + 'px'
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  return ctx
+}
+
+// The small sprites in the text: one canvas each, all fed by the one clock.
+const minis = [...document.querySelectorAll('canvas.mini')].map(canvas => {
+  const U = Number(canvas.dataset.u || 4)
+  return { ctx: sizeCanvas(canvas, U), U, state: canvas.dataset.state, canvas }
+})
+
+// The pet that walks the page's taskbar. Its position is the point between
+// its feet, in viewport pixels; seated on an element it rides along with it.
+const U = 5, W = 18 * U, H = 14 * U
+const el = document.getElementById('pet'), say = document.getElementById('say')
+const ctx = sizeCanvas(document.getElementById('petCanvas'), U)
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches
+const LINES = {
+  idle: ['хм...', 'как дела?', 'кодим?', 'git push?', 'попей воды', 'возьми меня'],
+  grab: ['эй!', 'уии!', 'куда?!', 'высоко!'],
+  seat: ['присел', 'удобно тут', 'моё место', 'посижу тут'],
+  miss: ['мимо!', 'ой', 'тут не сесть'],
+  click: ['привет!', 'хи', 'щекотно', 'я тут'],
+}
+const pick = list => list[Math.floor(Math.random() * list.length)]
+const pet = {
+  x: innerWidth * 0.3, y: 0, vy: 0, state: 'fall', st: 0, until: 0, dir: 1, target: 0, look: 0,
+  seat: null, seatX: 0, seatY: 0, held: false, grabX: 0, grabY: 0, moved: 0, sayUntil: 0,
+}
+const floor = () => innerHeight - parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar'))
+const set = (state, seconds) => { pet.state = state; pet.st = 0; pet.until = seconds }
+const speak = (text, seconds) => { say.textContent = text; pet.sayUntil = performance.now() / 1000 + seconds }
+
+function choose() {
+  const roll = Math.random()
+  if (pet.seat) return set(pick(['sit', 'sit', 'coffee', 'code', 'sleep']), 5 + Math.random() * 5)
+  if (roll < 0.4) {
+    pet.target = W + Math.random() * (innerWidth - 2 * W)
+    pet.dir = pet.target > pet.x ? 1 : -1
+    return set('walk', 12)
+  }
+  set(pick(['sit', 'code', 'coffee', 'music', 'dance', 'wave', 'idle', 'idle']), 3 + Math.random() * 4)
+}
+
+el.addEventListener('pointerdown', e => {
+  el.setPointerCapture(e.pointerId)
+  pet.held = true
+  pet.moved = 0
+  pet.grabX = pet.x - e.clientX
+  pet.grabY = pet.y - e.clientY
+  pet.seat = null
+  el.classList.add('held')
+  set('drag', 0)
+  speak(pick(LINES.grab), 1.5)
+  e.preventDefault()
+})
+el.addEventListener('pointermove', e => {
+  if (!pet.held) return
+  pet.moved += Math.abs(e.movementX) + Math.abs(e.movementY)
+  pet.x = e.clientX + pet.grabX
+  pet.y = e.clientY + pet.grabY
+})
+el.addEventListener('pointerup', () => {
+  if (!pet.held) return
+  pet.held = false
+  el.classList.remove('held')
+  if (pet.moved < 5) { set('wave', 1.6); speak(pick(LINES.click), 2); return }
+
+  // What lies under the feet, looking through the pet itself.
+  el.style.pointerEvents = 'none'
+  const under = document.elementFromPoint(pet.x, pet.y - 2)
+  el.style.pointerEvents = ''
+  const seat = under && under.closest('[data-seat]')
+  if (!seat || pet.y > floor()) { pet.vy = 0; set('fall', 0); if (pet.y < floor() - 40) speak(pick(LINES.miss), 1.5); return }
+
+  // Near the top edge it sits on the edge; deeper in, right where it was put.
+  const r = seat.getBoundingClientRect()
+  const depth = pet.y - r.top
+  pet.seat = seat
+  pet.seatX = pet.x - r.left
+  pet.seatY = depth <= 30 ? 0 : depth
+  set('sit', 6)
+  speak(pick(LINES.seat), 2)
+})
+
+let last = performance.now() / 1000, nextChat = last + 6
+function frame(ms) {
+  const t = ms / 1000, dt = Math.min(0.05, t - last)
+  last = t
+  pet.st += dt
+
+  if (pet.seat) {
+    const r = pet.seat.getBoundingClientRect()
+    pet.x = r.left + pet.seatX
+    pet.y = r.top + pet.seatY
+    // Scrolled far out of sight: it lets go and heads back to the taskbar.
+    if (pet.y < -H || pet.y > innerHeight + H) { pet.seat = null; pet.y = -H; pet.vy = 0; set('fall', 0) }
+    else if (pet.st > pet.until) choose()
+  } else if (pet.state === 'fall') {
+    pet.vy = Math.min(2600, pet.vy + 2200 * dt)
+    pet.y += pet.vy * dt
+    if (pet.y >= floor()) { pet.y = floor(); set('idle', 1) }
+  } else if (!pet.held) {
+    pet.y = floor()
+    pet.x = Math.max(W / 2, Math.min(innerWidth - W / 2, pet.x))
+    if (pet.state === 'walk') {
+      pet.x += pet.dir * 45 * dt
+      pet.look = pet.dir
+      if (pet.dir > 0 ? pet.x >= pet.target : pet.x <= pet.target) { pet.look = 0; set('idle', 1 + Math.random() * 2) }
+    } else if (pet.st > pet.until) choose()
+  }
+
+  if (t > pet.sayUntil) say.textContent = ''
+  if (t > nextChat && !pet.held && !say.textContent && ['idle', 'walk', 'sit'].includes(pet.state)) {
+    speak(pick(LINES.idle), 2.5)
+    nextChat = t + 12 + Math.random() * 14
+  }
+
+  el.style.transform = `translate(${Math.round(pet.x - W / 2)}px, ${Math.round(pet.y - H - HEADROOM * U)}px)`
+  ctx.clearRect(0, 0, W, H + HEADROOM * U)
+  drawPet(ctx, U, pet.state, t, pet.st, pet.look)
+  for (const m of minis) {
+    m.ctx.clearRect(0, 0, m.canvas.width, m.canvas.height)
+    drawPet(m.ctx, m.U, m.state, t, t, 0)
+  }
+  if (!still) requestAnimationFrame(frame)
+}
+
+// With motion turned off the page shows one still frame: the pet seated on
+// the taskbar and each little sprite in its pose.
+if (still) { pet.y = floor(); pet.state = 'sit'; pet.st = 1 }
+requestAnimationFrame(frame)
+
+const clock = document.getElementById('clock')
+const tick = () => { clock.textContent = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) }
+tick()
+setInterval(tick, 20000)
+</script>
 </body>
 </html>
