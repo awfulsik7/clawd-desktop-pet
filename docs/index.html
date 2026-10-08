@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claw'd на рабочем столе</title>
+<meta name="description" content="Неофициальный питомец Claw'd для Windows: ходит по панели задач, сидит на окнах и кнопках, слушает музыку вместе с тобой.">
+<style>
+  :root {
+    --bg: #1f1e1d;
+    --panel: #2a2826;
+    --line: #3d3a37;
+    --ink: #faf9f5;
+    --dim: #b5b0a6;
+    --clay: #d77757;
+    --clay-dark: #b85f42;
+    --clay-light: #e89a7c;
+    --px: 4px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 17px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+  h1, h2 { font-family: Georgia, "Times New Roman", serif; font-weight: 600; line-height: 1.15; margin: 0; }
+  h1 { font-size: clamp(36px, 7vw, 64px); letter-spacing: -0.01em; }
+  h2 { font-size: clamp(26px, 4vw, 36px); margin-bottom: 28px; }
+  p { margin: 0; }
+  a { color: var(--clay-light); }
+
+  /* Blocky corners, the same trick as the pet's speech bubble. */
+  .pixel {
+    clip-path: polygon(
+      0 var(--px), var(--px) var(--px), var(--px) 0,
+      calc(100% - var(--px)) 0, calc(100% - var(--px)) var(--px), 100% var(--px),
+      100% calc(100% - var(--px)), calc(100% - var(--px)) calc(100% - var(--px)), calc(100% - var(--px)) 100%,
+      var(--px) 100%, var(--px) calc(100% - var(--px)), 0 calc(100% - var(--px)));
+  }
+
+  header { padding: 72px 0 0; text-align: center; overflow: hidden; }
+  .lede { color: var(--dim); font-size: 20px; max-width: 620px; margin: 20px auto 32px; }
+  .button {
+    display: inline-block;
+    background: var(--clay);
+    color: #1a1915;
+    font-weight: 700;
+    font-size: 19px;
+    text-decoration: none;
+    padding: 16px 34px;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .button:hover { background: var(--clay-light); transform: translateY(-2px); }
+  .note { color: var(--dim); font-size: 14px; margin-top: 14px; }
+
+  /* The stage: a strip of desktop with a taskbar for the pet to stand on. */
+  .stage { position: relative; height: 230px; margin-top: 40px; }
+  .taskbar {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 46px;
+    background: var(--panel); border-top: 1px solid var(--line);
+  }
+  .pet { position: absolute; bottom: 46px; left: 50%; width: 144px; margin-left: -72px; animation: stroll 14s ease-in-out infinite; }
+  .pet svg { display: block; width: 100%; height: auto; shape-rendering: crispEdges; overflow: visible; }
+  .bubble {
+    position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: #1a1915; font: 600 15px Georgia, serif;
+    padding: 6px 14px; white-space: nowrap;
+  }
+  .bubble::after {
+    content: ""; position: absolute; left: 50%; bottom: -8px; margin-left: -6px;
+    border: 6px solid transparent; border-top-color: var(--ink); border-bottom: 0;
+  }
+  .body { animation: breathe 1.3s steps(1) infinite; }
+  .eye { animation: blink 4s steps(1) infinite; transform-box: fill-box; transform-origin: center; }
+  .arm-wave { animation: wave 0.45s steps(1) infinite; }
+  .leg-a { animation: step 0.3s steps(1) infinite; }
+  .leg-b { animation: step 0.3s steps(1) infinite 0.15s; }
+  @keyframes stroll { 0%, 100% { transform: translateX(-180px); } 50% { transform: translateX(180px); } }
+  @keyframes breathe { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-0.2px); } }
+  @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.2); } }
+  @keyframes wave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+  @keyframes step { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .pet, .body, .eye, .arm-wave, .leg-a, .leg-b { animation: none; }
+  }
+
+  section { padding: 72px 0; border-top: 1px solid var(--line); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); padding: 24px; }
+  .card h3 { margin: 0 0 8px; font-size: 19px; color: var(--clay-light); }
+  .card p { color: var(--dim); font-size: 16px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 12px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: var(--dim); width: 46%; }
+  ol { margin: 0; padding-left: 22px; }
+  li { margin-bottom: 10px; }
+  code { background: var(--panel); padding: 2px 7px; font: 15px Consolas, monospace; }
+
+  footer { padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--dim); font-size: 14px; }
+  footer p + p { margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>Claw'd на рабочем столе</h1>
+    <p class="lede">Маленький пиксельный питомец для Windows. Ходит по панели задач, садится на окна и кнопки, слушает музыку вместе с тобой и иногда что-нибудь говорит.</p>
+    <a class="button pixel" href="https://github.com/awfulsik7/clawd-desktop-pet/releases/latest/download/Clawd.exe">Скачать для Windows</a>
+    <p class="note">Бесплатно · один файл, без установки · Windows 10 и 11</p>
+  </div>
+
+  <div class="stage" aria-hidden="true">
+    <div class="pet">
+      <div class="bubble pixel">привет!</div>
+      <svg viewBox="0 0 18 14" xmlns="http://www.w3.org/2000/svg">
+        <g fill="#d77757">
+          <rect class="leg-a" x="4" y="12" width="1" height="2"/>
+          <rect class="leg-b" x="6" y="12" width="1" height="2"/>
+          <rect class="leg-a" x="11" y="12" width="1" height="2"/>
+          <rect class="leg-b" x="13" y="12" width="1" height="2"/>
+        </g>
+        <g class="body">
+          <rect x="3" y="4" width="12" height="8" fill="#d77757"/>
+          <rect x="3" y="4" width="11.5" height="0.5" fill="#e89a7c"/>
+          <rect x="14.5" y="4" width="0.5" height="8" fill="#b85f42"/>
+          <rect x="3" y="11.5" width="12" height="0.5" fill="#b85f42"/>
+          <rect x="1" y="8" width="2" height="2" fill="#d77757"/>
+          <rect x="1" y="9.5" width="2" height="0.5" fill="#b85f42"/>
+          <g class="arm-wave">
+            <rect x="15" y="4" width="2" height="3" fill="#d77757"/>
+            <rect x="15" y="6.5" width="2" height="0.5" fill="#b85f42"/>
+          </g>
+          <rect class="eye" x="5" y="6" width="1" height="2" fill="#1a1915"/>
+          <rect class="eye" x="12" y="6" width="1" height="2" fill="#1a1915"/>
+          <rect x="5" y="6" width="0.5" height="0.5" fill="#fff"/>
+          <rect x="12" y="6" width="0.5" height="0.5" fill="#fff"/>
+        </g>
+      </svg>
+    </div>
+    <div class="taskbar"></div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>Что он умеет</h2>
+    <div class="grid">
+      <div class="card pixel"><h3>Живёт на экране</h3><p>Гуляет по панели задач, сидит, спит в ночном колпаке, потягивается и машет лапкой.</p></div>
+      <div class="card pixel"><h3>Садится куда положишь</h3><p>Перетащи его на кнопку, обложку альбома или строку списка — он присядет там и поедет вместе с ней.</p></div>
+      <div class="card pixel"><h3>Цепляется за окна</h3><p>Висит на верхнем крае окна, держится за бок, ползёт вверх по краю экрана.</p></div>
+      <div class="card pixel"><h3>Повторяет за тобой</h3><p>Музыка — надевает наушники и называет трек. Видео — берёт попкорн. Игра — достаёт геймпад.</p></div>
+      <div class="card pixel"><h3>Занят делом</h3><p>Кодит на ноутбуке, читает, пьёт кофе, ищет баги с лупой, делает зарядку и празднует.</p></div>
+      <div class="card pixel"><h3>Разговаривает</h3><p>Короткие реплики в пиксельном облачке. Можно выключить одной галочкой.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Он замечает, чем ты занят</h2>
+    <table>
+      <tr><td>Слушаешь музыку</td><td>В наушниках, называет трек или исполнителя</td></tr>
+      <tr><td>Смотришь видео</td><td>С попкорном, комментирует</td></tr>
+      <tr><td>Играешь на весь экран</td><td>С геймпадом, язык наружу</td></tr>
+      <tr><td>Пишешь код</td><td>Кодит рядом</td></tr>
+      <tr><td>Сидишь в мессенджере</td><td>С телефоном</td></tr>
+      <tr><td>Отошёл от компьютера</td><td>Спит, а потом говорит «с возвращением!»</td></tr>
+    </table>
+    <p class="note">Для этого он читает заголовки окон и название того, что играет. Всё остаётся на твоём компьютере: в интернет питомец не выходит вообще.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Как запустить</h2>
+    <ol>
+      <li>Скачай <code>Clawd.exe</code> и запусти его. Claw'd упадёт сверху на панель задач.</li>
+      <li>Windows может показать предупреждение «Система Windows защитила ваш компьютер»: у файла нет платной цифровой подписи. Нажми «Подробнее», затем «Выполнить в любом случае».</li>
+      <li>Таскай его мышкой. Правый клик открывает меню с анимациями, размером и настройками.</li>
+      <li>Чтобы убрать, запусти файл ещё раз или выбери «Убрать Claw'd» в меню.</li>
+    </ol>
+    <p class="note">Исходный код открыт: <a href="https://github.com/awfulsik7/clawd-desktop-pet">github.com/awfulsik7/clawd-desktop-pet</a>. Программу можно собрать самому одним скриптом, без установки чего-либо.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Неофициальный фанатский проект. Не связан с Anthropic и не одобрен ею. Claw'd и Claude — товарные знаки Anthropic.</p>
+    <p>Все анимации нарисованы кодом; изображения и шрифты Anthropic в программу не входят.</p>
+  </div>
+</footer>
+
+</body>
+</html>
